@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for lib/find-app-js.py.
+"""Tests for lib/find_app_js.py.
 
 Only the resolver is tested here, deliberately. It is pure logic, it already
 shipped one real bug (scanning a single cache root, and so picking a copy the
@@ -20,7 +20,7 @@ import sys
 import tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RESOLVER = os.path.join(REPO, "lib", "find-app-js.py")
+RESOLVER = os.path.join(REPO, "lib", "find_app_js.py")
 
 ARCH = {"x86_64": "x64", "amd64": "x64",
         "aarch64": "arm64", "arm64": "arm64"}.get(

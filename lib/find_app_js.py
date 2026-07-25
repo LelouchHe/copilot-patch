@@ -128,10 +128,15 @@ def find_app_js():
     return os.path.join(candidates[0], "app.js")
 
 
-if __name__ == "__main__":
+def main():
     resolved = find_app_js()
     if not resolved:
         print("find-app-js: no app.js found in any copilot package cache",
               file=sys.stderr)
-        sys.exit(1)
+        return 1
     print(resolved)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

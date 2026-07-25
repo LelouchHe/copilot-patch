@@ -29,9 +29,33 @@ re-applied first, on every single spawn.
 | Path | Purpose |
 |---|---|
 | `bin/copilot-acp.sh` | Wrapper: applies all patches, then `exec`s `copilot` with the args passed through |
-| `patches/*.sh` | Individual patches; idempotent, independently runnable |
-| `lib/find-app-js.py` | Resolves which `app.js` copilot will actually load |
+| `patches/*` | Individual patches; any executable, idempotent, independently runnable |
+| `lib/find_app_js.py` | Resolves which `app.js` copilot will actually load |
 | `tests/` | Tests for the resolver |
+
+## Why bash and Python
+
+The wrapper is bash because its whole job is *process plumbing*: glob a
+directory, run each entry, then `exec` copilot so the agent replaces this process
+rather than hanging a supervisor off it. That keeps the process tree flat, signals
+direct, and the host's `ps` output honest. It runs on every spawn, costs ~3ms, and
+has no version or dependency surface to break. If the wrapper fails, the agent
+does not start — so it should be the least sophisticated thing in the stack.
+
+Patches are Python because their job is the opposite: careful text surgery on a
+9 MB minified bundle, with regex, atomic replace, and subprocess verification.
+
+Node/TypeScript would work — Node 24's `process.execve` gives real process
+replacement, so even the wrapper is expressible. It is not used because it buys
+nothing here and costs robustness: a TS wrapper would need node on `PATH` plus
+type-stripping support just to launch, turning a soft dependency (Python and node
+are only needed to *patch* and *verify*, and a missing node merely downgrades to a
+warning) into a fatal one.
+
+The one thing deliberately avoided is mixing the two. An earlier version was a
+bash script that was 75% Python heredoc — the worst of both, with no syntax
+highlighting, no linting, and quoting hazards. The boundary is now crisp: bash for
+process control, Python for logic.
 
 ## Finding the right app.js
 
@@ -46,7 +70,7 @@ and 1.0.75 in `~/Library/Caches/copilot/pkg`. A newer build landing in the older
 root would win — and a patcher that only looked at the obvious root would happily
 patch a copy nobody loads.
 
-`lib/find-app-js.py` mirrors the loader's own resolution (ported from its
+`lib/find_app_js.py` mirrors the loader's own resolution (ported from its
 `index.js`), including prerelease ordering. It does not model `--prefer-version`
 or the auto-update-disabled path, which bypass the cache scan entirely; pass an
 explicit path to a patch if you need those.
@@ -65,13 +89,13 @@ Flags are passed straight through, so the CLI stays configurable from there.
 Patches can also be run standalone:
 
 ```bash
-./patches/acp-context-tier.sh              # resolves the loaded app.js itself
-./patches/acp-context-tier.sh /path/app.js # or target one explicitly
+./patches/acp-context-tier.py              # resolves the loaded app.js itself
+./patches/acp-context-tier.py /path/app.js # or target one explicitly
 ```
 
 ## Patches
 
-### `acp-context-tier.sh`
+### `acp-context-tier.py`
 
 **Problem:** in ACP mode (`copilot --acp`), the context window tier is silently
 ignored. Both `--context long_context` and `"contextTier"` in
@@ -118,7 +142,7 @@ loud and non-destructive:
   `node --check` on it, and only then renames it over the target. A regex that
   matches in the wrong place produces invalid JS, and copilot would then fail to
   start at all — much worse than an unpatched agent. This is not hypothetical: it
-  happened while developing `acp-context-tier.sh`, where an injection swallowed
+  happened while developing `acp-context-tier.py`, where an injection swallowed
   the following method name.
 - **Anchor misses abort.** Patches key off call sites and reverse-derive minified
   identifiers from surrounding code rather than hardcoding them. If an anchor

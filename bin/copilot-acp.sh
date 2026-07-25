@@ -17,10 +17,11 @@
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Apply every patch in patches/. All are idempotent and best-effort: a failure
-# must never stop the agent from starting. Output goes to stderr so it lands in
-# the host's log instead of corrupting the ACP stdio channel.
-for patch in "$REPO_DIR"/patches/*.sh; do
-  [ -x "$patch" ] || continue
+# must never stop the agent from starting. Any executable is accepted, so a patch
+# can be written in whatever suits it. Output goes to stderr so it lands in the
+# host's log instead of corrupting the ACP stdio channel.
+for patch in "$REPO_DIR"/patches/*; do
+  [ -f "$patch" ] && [ -x "$patch" ] || continue
   "$patch" >&2 || echo "copilot-acp: warn: $(basename "$patch") failed; continuing" >&2
 done
 
