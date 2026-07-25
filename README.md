@@ -30,6 +30,25 @@ re-applied first, on every single spawn.
 |---|---|
 | `bin/copilot-acp.sh` | Wrapper: applies all patches, then `exec`s `copilot` with the args passed through |
 | `patches/*.sh` | Individual patches; idempotent, independently runnable |
+| `lib/find-app-js.py` | Resolves which `app.js` copilot will actually load |
+
+## Finding the right app.js
+
+Non-obvious, and getting it wrong fails silently. The loader does **not** just use
+the newest directory under one cache root — it scans several roots
+(`$COPILOT_CACHE_HOME`, `~/Library/Caches/copilot`, `$XDG_CACHE_HOME/copilot`,
+`$COPILOT_HOME`, `~/.copilot`), each with `universal/` and `<platform>-<arch>/`
+subdirectories, then picks the **highest version across all of them**.
+
+That matters in practice: this machine had 1.0.70–1.0.74 left in `~/.copilot/pkg`
+and 1.0.75 in `~/Library/Caches/copilot/pkg`. A newer build landing in the older
+root would win — and a patcher that only looked at the obvious root would happily
+patch a copy nobody loads.
+
+`lib/find-app-js.py` mirrors the loader's own resolution (ported from its
+`index.js`), including prerelease ordering. It does not model `--prefer-version`
+or the auto-update-disabled path, which bypass the cache scan entirely; pass an
+explicit path to a patch if you need those.
 
 ## Install
 
@@ -45,7 +64,7 @@ Flags are passed straight through, so the CLI stays configurable from there.
 Patches can also be run standalone:
 
 ```bash
-./patches/acp-context-tier.sh              # auto-detects the newest cached app.js
+./patches/acp-context-tier.sh              # resolves the loaded app.js itself
 ./patches/acp-context-tier.sh /path/app.js # or target one explicitly
 ```
 

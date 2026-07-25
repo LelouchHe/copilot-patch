@@ -24,18 +24,15 @@
 
 set -euo pipefail
 
-CACHE_ROOT="$HOME/Library/Caches/copilot/pkg"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-find_app_js() {
-  # newest (by version) app.js under the copilot package cache; all candidates share
-  # the same path prefix, so a plain version sort on the full path is sufficient
-  find "$CACHE_ROOT" -maxdepth 3 -name app.js -type f 2>/dev/null | sort -V | tail -1
-}
-
-APP_JS="${1:-$(find_app_js)}"
+# Resolve the app.js copilot will actually load. The loader scans several cache
+# roots and picks by version, so "newest directory under the obvious root" is not
+# good enough -- see lib/find-app-js.py.
+APP_JS="${1:-$("$REPO_DIR/lib/find-app-js.py")}"
 
 if [ -z "$APP_JS" ] || [ ! -f "$APP_JS" ]; then
-  echo "acp-context-tier: app.js not found under $CACHE_ROOT" >&2
+  echo "acp-context-tier: app.js not found: ${APP_JS:-<unresolved>}" >&2
   exit 1
 fi
 
