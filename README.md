@@ -31,6 +31,7 @@ re-applied first, on every single spawn.
 | `bin/copilot-acp.sh` | Wrapper: applies all patches, then `exec`s `copilot` with the args passed through |
 | `patches/*.sh` | Individual patches; idempotent, independently runnable |
 | `lib/find-app-js.py` | Resolves which `app.js` copilot will actually load |
+| `tests/` | Tests for the resolver |
 
 ## Finding the right app.js
 
@@ -108,14 +109,37 @@ on every restore.
 **Upstream:** related but not ACP-specific — github/copilot-cli#3481, #3762.
 Delete this patch once ACP honours the tier.
 
-## Notes
+## Safety
 
-- Each patch backs up the original as `app.js.orig` on first run (never
-  overwritten, so it always holds a pristine copy). Roll back with
-  `cp app.js.orig app.js`.
-- Patches anchor on **call sites** rather than function bodies, and reverse-derive
-  minified identifiers from surrounding code instead of hardcoding them. If an
-  anchor stops matching, the script exits non-zero **without writing** rather than
-  producing a corrupted bundle.
-- The wrapper never fails the launch: a broken patch degrades to a stderr warning
-  and an unpatched — but working — agent.
+Patching a minified bundle in place is inherently sharp, so failures are made
+loud and non-destructive:
+
+- **Verify before publishing.** A patch writes to a temp file, runs
+  `node --check` on it, and only then renames it over the target. A regex that
+  matches in the wrong place produces invalid JS, and copilot would then fail to
+  start at all — much worse than an unpatched agent. This is not hypothetical: it
+  happened while developing `acp-context-tier.sh`, where an injection swallowed
+  the following method name.
+- **Anchor misses abort.** Patches key off call sites and reverse-derive minified
+  identifiers from surrounding code rather than hardcoding them. If an anchor
+  stops matching, the script exits non-zero **without writing**.
+- **The wrapper never blocks startup.** Any patch failure degrades to a stderr
+  warning and an unpatched — but working — agent.
+- **Originals are kept.** First run saves `app.js.orig` (never overwritten, so it
+  always holds a pristine copy). Roll back with `cp app.js.orig app.js`.
+
+## Testing
+
+```bash
+python3 tests/test_find_app_js.py
+```
+
+Only the resolver is tested, deliberately. It is pure logic, its failure mode is
+silent (patching the wrong `app.js` still reports success), and it already
+shipped exactly that bug. The suite is mutation-checked: reintroducing the
+single-root scan makes it fail.
+
+The patch scripts are not unit tested. Their regex anchors are only meaningful
+against a real copilot bundle, and they already self-verify at runtime via
+`node --check`. The real integration test is starting the agent through the
+wrapper, which happens on every spawn.

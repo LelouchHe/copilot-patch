@@ -17,8 +17,9 @@
 # on every spawn.
 #
 # Verified on copilot 1.0.75. Anchors are call sites rather than function bodies,
-# so it degrades to a clean error (exit 2, file untouched) rather than corrupting
-# the bundle if upstream restructures.
+# so an anchor miss is a clean error (exit 2, file untouched). The result is also
+# syntax-checked before it replaces the original (exit 3 if it does not parse),
+# so a bad splice can never leave copilot unable to start.
 #
 # Usage: acp-context-tier.sh [path/to/app.js]
 
@@ -37,7 +38,7 @@ if [ -z "$APP_JS" ] || [ ! -f "$APP_JS" ]; then
 fi
 
 APP_JS="$APP_JS" python3 <<'PY'
-import os, re, shutil, sys
+import os, re, shutil, subprocess, sys
 
 path = os.environ["APP_JS"]
 src = open(path, "r", encoding="utf-8", errors="surrogateescape").read()
@@ -115,10 +116,44 @@ backup = path + ".orig"
 if not os.path.exists(backup):
     shutil.copy2(path, backup)
 
-with open(path, "w", encoding="utf-8", errors="surrogateescape") as f:
+# Verify before publishing. A regex that matches but splices in the wrong place
+# yields a bundle that is subtly invalid JS, and copilot then fails to start at
+# all -- a far worse outcome than an unpatched agent. This exact failure happened
+# while developing this patch (an injection swallowed the following method name),
+# so the check is not hypothetical.
+#
+# Write a sibling temp file, validate it, then rename over the target. Same
+# directory keeps the rename atomic, and the .mjs suffix is required because the
+# bundle is an ES module that `node --check` would otherwise parse as CommonJS.
+tmp = path + ".patching.mjs"
+with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
     f.write(src)
 
-print(f"acp-context-tier: patched {path} "
+node = shutil.which("node")
+if node:
+    proc = subprocess.run([node, "--check", tmp], capture_output=True, text=True)
+    if proc.returncode != 0:
+        os.unlink(tmp)
+        # node echoes the offending source line first, and in a minified bundle
+        # that is enormous and often contains the word "Error" itself. Pick out
+        # the actual diagnostic and cap it.
+        match = re.search(r"^\s*(\w*(?:Syntax|Reference|Type)Error:.*)$",
+                          proc.stderr, re.M)
+        detail = match.group(1)[:160] if match else "node --check failed"
+        print(f"acp-context-tier: ERROR patched bundle is not valid JS, "
+              f"leaving {path} untouched. {detail}", file=sys.stderr)
+        sys.exit(3)
+    verdict = "verified"
+else:
+    # The wrapper must never block startup, so a missing node degrades to a
+    # warning rather than refusing to patch.
+    print("acp-context-tier: warning: node not found, skipping syntax check",
+          file=sys.stderr)
+    verdict = "UNVERIFIED"
+
+os.replace(tmp, path)
+
+print(f"acp-context-tier: patched {path} [{verdict}] "
       f"(session sites: {n_create}, force-apply: {n_apply}, "
       f"model-switch: {n_switch}, loader: {loader})")
 PY
