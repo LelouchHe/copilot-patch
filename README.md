@@ -57,6 +57,32 @@ bash script that was 75% Python heredoc — the worst of both, with no syntax
 highlighting, no linting, and quoting hazards. The boundary is now crisp: bash for
 process control, Python for logic.
 
+### On the missing type system
+
+A fair objection, and the honest answer is that it buys little *here*. Of the five
+bugs hit while building this, a static type checker would have caught **none**:
+the helper injection that produced invalid JS, the resolver scanning one cache
+root too few, the tier being overridden on the resume path, a fragile `sort -k`
+field number, and an error message grabbing the wrong line. Every one is
+well-typed — `str` in, `str` out — and wrong anyway.
+
+That is inherent to the domain. The input is 9 MB of minified JavaScript and the
+output is the same string, edited. Nothing interesting is expressible as a type;
+what actually matters is whether a regex landed in the right place, whether the
+result still parses, and whether the patched program behaves correctly at runtime.
+
+So the verification lives where the risk is, not in the patcher's signatures:
+
+| Risk | Gate |
+|---|---|
+| Regex matched the wrong place | `node --check` before publishing |
+| Upstream restructured | Anchor miss → exit 2, nothing written |
+| Resolver picks a copy nobody loads | `tests/`, mutation-checked |
+| Patch does not actually work | A/B probe against a live agent |
+
+Type hints are present anyway — they cost nothing at runtime, document intent, and
+make `mypy`/`pyright` usable if the code ever grows structured data worth checking.
+
 ## Finding the right app.js
 
 Non-obvious, and getting it wrong fails silently. The loader does **not** just use

@@ -35,6 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import Dict, List, NoReturn, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 os.pardir, "lib"))
@@ -44,12 +45,12 @@ NAME = "acp-context-tier"
 MARKER = "__acpContextTier"
 
 
-def fail(msg, code):
+def fail(msg: str, code: int) -> NoReturn:
     print(f"{NAME}: ERROR {msg}", file=sys.stderr)
     sys.exit(code)
 
 
-def build_patch(src):
+def build_patch(src: str) -> Tuple[str, Dict[str, object]]:
     """Return patched source plus a dict of what was touched.
 
     Raises LookupError if a required anchor is missing, so the caller can bail
@@ -124,7 +125,7 @@ def build_patch(src):
                  "model-switch": n_switch, "loader": loader}
 
 
-def publish(path, src):
+def publish(path: str, src: str) -> str:
     """Write src over path, but only if it is still valid JavaScript.
 
     A regex that matches in the wrong place yields a bundle that is subtly
@@ -172,7 +173,7 @@ def publish(path, src):
     return verdict
 
 
-def main(argv):
+def main(argv: List[str]) -> int:
     # Resolve the app.js copilot will actually load. The loader scans several
     # cache roots and picks by version, so "newest under the obvious root" is
     # not good enough -- see lib/find_app_js.py.

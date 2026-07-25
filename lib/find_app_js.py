@@ -30,9 +30,10 @@ import os
 import platform
 import re
 import sys
+from typing import List, Optional, Tuple
 
 
-def platform_arch():
+def platform_arch() -> Tuple[str, Optional[str]]:
     """Mirror the loader's `xe()`: <platform>-<arch>, with musl linux special-cased."""
     system = platform.system().lower()
     if system == "darwin":
@@ -52,7 +53,7 @@ def platform_arch():
     return f"{plat}-{arch}", (f"linuxmusl-{arch}" if plat == "linux" else None)
 
 
-def cache_roots():
+def cache_roots() -> List[str]:
     """Mirror the loader's `K()`, preserving order and dropping duplicates."""
     home = os.path.expanduser("~")
     roots = []
@@ -87,13 +88,13 @@ def cache_roots():
     return out
 
 
-def parse_version(name):
+def parse_version(name: str) -> Optional[Tuple[int, int, int]]:
     """Mirror `j()`: leading X.Y.Z of a directory name, or None."""
     m = re.match(r"^(\d+)\.(\d+)\.(\d+)", name)
     return tuple(int(g) for g in m.groups()) if m else None
 
 
-def sort_key(path):
+def sort_key(path: str) -> tuple:
     """Mirror the `Qe`-based comparator: version desc, prerelease last, path asc.
 
     Expressed as an ascending sort key, so version components are negated and the
@@ -107,7 +108,7 @@ def sort_key(path):
     return (0, tuple(-c for c in v), 1 if "-" in name else 0, path)
 
 
-def find_app_js():
+def find_app_js() -> Optional[str]:
     candidates = []
     pa, pa_musl = platform_arch()
     for root in cache_roots():
@@ -128,7 +129,7 @@ def find_app_js():
     return os.path.join(candidates[0], "app.js")
 
 
-def main():
+def main() -> int:
     resolved = find_app_js()
     if not resolved:
         print("find-app-js: no app.js found in any copilot package cache",
