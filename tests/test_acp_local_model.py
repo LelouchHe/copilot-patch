@@ -38,6 +38,7 @@ SOURCE = (
     'catch(s){throw s}return{configOptions:r?await this.sendConfigOptionsUpdate('
     'e.sessionId,n):await this.buildCurrentConfigOptions(n)}}'
     'async unstable_setSessionModel(e){let n=this.sessions.get(e.sessionId);'
+    'if(!n)throw xo.resourceNotFound(`Session ${e.sessionId} not found`);'
     'let r=e.modelId;if(typeof r!="string")throw new xo(-32602,"bad");'
     'let o=r.trim();if(o==="")throw new xo(-32602,"bad");'
     'return this.validateModelAvailable(n,o),await this.applySessionModel(n,o),{}}'
@@ -74,6 +75,10 @@ class LocalModelPatchTests(unittest.TestCase):
         result, stats = patch.build_patch(SOURCE)
         self.assertIn("models:__localModels", result)
         self.assertIn("async unstable_setSessionModel", result)
+        self.assertLess(
+            result.index("resourceNotFound"),
+            result.index('e.modelId!=="local"'),
+        )
         self.assertIn('e.modelId!=="local"', result)
         self.assertEqual(stats["legacy-models"], 1)
         self.assertEqual(stats["legacy-model-set"], 1)

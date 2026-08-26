@@ -96,12 +96,15 @@ def build_patch(src: str) -> Tuple[str, Dict[str, int]]:
     src = src[:insert_at] + guard + src[insert_at:]
 
     legacy_setter = re.search(
-        r"async unstable_setSessionModel\((\w+)\)\{",
+        r"async unstable_setSessionModel\((\w+)\)\{"
+        r"(let (\w+)=this\.sessions\.get\(\1\.sessionId\);"
+        r"if\(!\3\)throw \w+\.resourceNotFound\([^;]+;)",
         src,
     )
     if not legacy_setter:
         raise LookupError("unstable_setSessionModel anchor not found")
     legacy_request = legacy_setter.group(1)
+    legacy_session_check = legacy_setter.group(2)
     legacy_guard = (
         f"let __localLabel=process.env.{MARKER}?.trim();"
         "if(__localLabel){"
@@ -109,8 +112,13 @@ def build_patch(src: str) -> Tuple[str, Dict[str, int]]:
         '(-32602,"This ACP session is fixed to the local model.");'
         "return{}}"
     )
-    insert_at = legacy_setter.end()
-    src = src[:insert_at] + legacy_guard + src[insert_at:]
+    replacement = (
+        f"async unstable_setSessionModel({legacy_request})"
+        "{"
+        + legacy_session_check
+        + legacy_guard
+    )
+    src = src[: legacy_setter.start()] + replacement + src[legacy_setter.end() :]
 
     legacy_models = re.search(
         r"(async buildSessionStateResponse\(.*?)(return\{models:(\w+),"
