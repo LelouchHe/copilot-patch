@@ -16,14 +16,13 @@
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Apply every patch in patches/. All are idempotent and best-effort: a failure
-# must never stop the agent from starting. Any executable is accepted, so a patch
-# can be written in whatever suits it. Output goes to stderr so it lands in the
-# host's log instead of corrupting the ACP stdio channel.
-for patch in "$REPO_DIR"/patches/*; do
-  [ -f "$patch" ] && [ -x "$patch" ] || continue
-  "$patch" >&2 || echo "copilot-acp: warn: $(basename "$patch") failed; continuing" >&2
-done
+# Rebuild from the pristine bundle and apply executable patches in filename
+# order. Each patch gets an isolated candidate: a failure is discarded while
+# later independent patches still run. The final last-good stage is published
+# atomically. Pipeline failure never prevents the unpatched/last-good CLI from
+# starting.
+python3 "$REPO_DIR/lib/apply_patches.py" >&2 ||
+  echo "copilot-acp: warn: patch pipeline failed; continuing with live bundle" >&2
 
 # Resolve copilot from PATH, with a Homebrew fallback in case this is spawned
 # from an environment that never sourced the user's shell env.

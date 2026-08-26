@@ -28,19 +28,18 @@ re-applied first, on every single spawn.
 
 | Path | Purpose |
 |---|---|
-| `bin/copilot-acp.sh` | Wrapper: applies all patches, then `exec`s `copilot` with the args passed through |
+| `bin/copilot-acp.sh` | Wrapper: runs the staged patch pipeline, then `exec`s `copilot` with the args passed through |
+| `lib/apply_patches.py` | Rebuilds from pristine source, isolates each patch, and atomically publishes the last-good stage |
 | `patches/*` | Individual patches; any executable, idempotent, independently runnable |
 | `lib/find_app_js.py` | Resolves which `app.js` copilot will actually load |
-| `tests/` | Tests for the resolver |
+| `tests/` | Tests for the resolver, patch pipeline, and structured patch logic |
 
 ## Why bash and Python
 
-The wrapper is bash because its whole job is *process plumbing*: glob a
-directory, run each entry, then `exec` copilot so the agent replaces this process
-rather than hanging a supervisor off it. That keeps the process tree flat, signals
-direct, and the host's `ps` output honest. It runs on every spawn, costs ~3ms, and
-has no version or dependency surface to break. If the wrapper fails, the agent
-does not start — so it should be the least sophisticated thing in the stack.
+The wrapper is bash because its whole job is *process plumbing*: run the Python
+pipeline, then `exec` copilot so the agent replaces this process rather than
+hanging a supervisor off it. That keeps the process tree flat, signals direct,
+and the host's `ps` output honest.
 
 Patches are Python because their job is the opposite: careful text surgery on a
 9 MB minified bundle, with regex, atomic replace, and subprocess verification.
@@ -48,9 +47,9 @@ Patches are Python because their job is the opposite: careful text surgery on a
 Node/TypeScript would work — Node 24's `process.execve` gives real process
 replacement, so even the wrapper is expressible. It is not used because it buys
 nothing here and costs robustness: a TS wrapper would need node on `PATH` plus
-type-stripping support just to launch, turning a soft dependency (Python and node
-are only needed to *patch* and *verify*, and a missing node merely downgrades to a
-warning) into a fatal one.
+type-stripping support just to launch. Python and node remain soft dependencies
+for patching: if the pipeline cannot run or node cannot validate JavaScript, the
+wrapper leaves the live bundle untouched and still starts Copilot.
 
 The one thing deliberately avoided is mixing the two. An earlier version was a
 bash script that was 75% Python heredoc — the worst of both, with no syntax
@@ -112,12 +111,38 @@ agent_cmd = "/Users/<you>/mine/code/copilot-patch/bin/copilot-acp.sh --acp --con
 
 Flags are passed straight through, so the CLI stays configurable from there.
 
-Patches can also be run standalone:
+Patches can also be run standalone, though normal launches should use the
+pipeline:
 
 ```bash
 ./patches/acp-context-tier.py              # resolves the loaded app.js itself
 ./patches/acp-context-tier.py /path/app.js # or target one explicitly
 ```
+
+## Patch pipeline
+
+Every wrapper launch rebuilds the loaded bundle from `app.js.orig` and applies
+executable files in `patches/` in filename order. Each patch receives its own
+candidate copy:
+
+1. Success plus JavaScript validation promotes the candidate to last-good.
+2. Failure discards only that candidate and continues with the next patch.
+3. A final `node --check` gates one atomic publish of the last-good stage.
+4. A fatal pipeline failure leaves the live bundle untouched and never blocks
+   Copilot startup.
+
+The wrapper logs the complete result:
+
+```text
+copilot-patch:
+  APPLIED  acp-context-tier.py
+  FAILED   acp-local-model.py — anchor not found
+  RESULT   1 applied, 1 failed
+```
+
+Patches should be independent. Filename order is deterministic for the few cases
+where one patch intentionally builds on another. Removing or making a patch
+non-executable removes it from the next rebuild; no reverse patch is needed.
 
 ## Patches
 
@@ -159,6 +184,20 @@ on every restore.
 **Upstream:** related but not ACP-specific — github/copilot-cli#3481, #3762.
 Delete this patch once ACP honours the tier.
 
+### `acp-local-model.py`
+
+**Problem:** Copilot BYOK pins inference to `COPILOT_MODEL`, but ACP still
+advertises the GitHub cloud model catalog. ACP hosts therefore show selectable
+cloud models that do not describe the actual local route.
+
+**Fix:** when `COPILOT_PATCH_LOCAL_MODEL_LABEL` is set, ACP exposes one logical
+model with value `local` and the supplied display label. Selecting `local` is a
+no-op; other model values are rejected. The provider and wire model are not
+changed. Without the environment variable, cloud catalog behavior is untouched.
+
+This is presentation/selection compatibility only. Delete the patch when Copilot
+ACP reports BYOK models correctly upstream.
+
 ## Safety
 
 Patching a minified bundle in place is inherently sharp, so failures are made
@@ -175,21 +214,27 @@ loud and non-destructive:
   stops matching, the script exits non-zero **without writing**.
 - **The wrapper never blocks startup.** Any patch failure degrades to a stderr
   warning and an unpatched — but working — agent.
-- **Originals are kept.** First run saves `app.js.orig` (never overwritten, so it
-  always holds a pristine copy). Roll back with `cp app.js.orig app.js`.
+- **Originals are kept.** First run saves `app.js.orig` and never overwrites it.
+  Every launch rebuilds from that pristine copy, so removing a patch automatically
+  rolls it back while retaining all other successful patches.
+- **Patch failures are isolated.** A failed candidate is discarded and later
+  independent patches continue from the previous last-good stage.
+- **Publication is atomic.** The live bundle changes only once, after the final
+  staged bundle passes syntax validation.
+- **Pristine backup creation is atomic.** An interrupted first copy cannot leave
+  a partial `.orig` that future rebuilds mistake for the source of truth.
+- **Validation is mandatory for publication.** If node is unavailable, the
+  pipeline preserves the live bundle rather than publishing unchecked code.
 
 ## Testing
 
 ```bash
 python3 tests/test_find_app_js.py
+python3 tests/test_apply_patches.py
+python3 tests/test_acp_local_model.py
 ```
 
-Only the resolver is tested, deliberately. It is pure logic, its failure mode is
-silent (patching the wrong `app.js` still reports success), and it already
-shipped exactly that bug. The suite is mutation-checked: reintroducing the
-single-root scan makes it fail.
-
-The patch scripts are not unit tested. Their regex anchors are only meaningful
-against a real copilot bundle, and they already self-verify at runtime via
-`node --check`. The real integration test is starting the agent through the
-wrapper, which happens on every spawn.
+The pipeline suite verifies skip-on-failure, continuation, rebuild-from-pristine,
+and preservation of the live bundle when final validation fails. Patch-specific
+tests cover structured transformations where practical. Every patch and the
+final pipeline output are also checked against JavaScript syntax at runtime.
