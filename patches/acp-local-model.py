@@ -95,7 +95,56 @@ def build_patch(src: str) -> Tuple[str, Dict[str, int]]:
     )
     src = src[:insert_at] + guard + src[insert_at:]
 
-    return src, {"model-options": 1, "model-set": 1}
+    legacy_setter = re.search(
+        r"async unstable_setSessionModel\((\w+)\)\{",
+        src,
+    )
+    if not legacy_setter:
+        raise LookupError("unstable_setSessionModel anchor not found")
+    legacy_request = legacy_setter.group(1)
+    legacy_guard = (
+        f"let __localLabel=process.env.{MARKER}?.trim();"
+        "if(__localLabel){"
+        f'if({legacy_request}.modelId!=="local")throw new {error_type}'
+        '(-32602,"This ACP session is fixed to the local model.");'
+        "return{}}"
+    )
+    insert_at = legacy_setter.end()
+    src = src[:insert_at] + legacy_guard + src[insert_at:]
+
+    legacy_models = re.search(
+        r"(async buildSessionStateResponse\(.*?)(return\{models:(\w+),"
+        r"modes:(\w+),configOptions:(\w+)\})",
+        src,
+        re.S,
+    )
+    if not legacy_models:
+        raise LookupError("buildSessionStateResponse models anchor not found")
+    model_state = legacy_models.group(3)
+    modes = legacy_models.group(4)
+    config_options = legacy_models.group(5)
+    legacy_replacement = (
+        legacy_models.group(1)
+        + f"let __localLabel=process.env.{MARKER}?.trim();"
+        + "let __localModels=__localLabel?"
+        + '{availableModels:[{modelId:"local",name:__localLabel,'
+        + 'description:__localLabel}],currentModelId:"local"}:'
+        + model_state
+        + f";return{{models:__localModels,modes:{modes},"
+        + f"configOptions:{config_options}}}"
+    )
+    src = (
+        src[: legacy_models.start()]
+        + legacy_replacement
+        + src[legacy_models.end() :]
+    )
+
+    return src, {
+        "model-options": 1,
+        "model-set": 1,
+        "legacy-models": 1,
+        "legacy-model-set": 1,
+    }
 
 
 def publish(path: str, src: str) -> str:

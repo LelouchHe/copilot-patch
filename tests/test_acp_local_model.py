@@ -37,6 +37,15 @@ SOURCE = (
     'await this.applySessionModel(n,a),r=!1;break}case"allow_all":{break}}}'
     'catch(s){throw s}return{configOptions:r?await this.sendConfigOptionsUpdate('
     'e.sessionId,n):await this.buildCurrentConfigOptions(n)}}'
+    'async unstable_setSessionModel(e){let n=this.sessions.get(e.sessionId);'
+    'let r=e.modelId;if(typeof r!="string")throw new xo(-32602,"bad");'
+    'let o=r.trim();if(o==="")throw new xo(-32602,"bad");'
+    'return this.validateModelAvailable(n,o),await this.applySessionModel(n,o),{}}'
+    'async buildSessionStateResponse(e,n,r){'
+    'let{modelState:o,modelLimits:s,capiModels:a}=await this.fetchModelsForSession(r,e);'
+    'n.modelState=o,n.modelLimits=s;let l=await this.resolveEffectiveSelectedModelId(n),'
+    'c=await this.buildConfigOptions(n,l),d={availableModes:[],currentModeId:n.currentModeId};'
+    'return{models:o,modes:d,configOptions:c}}'
 )
 
 
@@ -59,6 +68,15 @@ class LocalModelPatchTests(unittest.TestCase):
         result, _ = patch.build_patch(SOURCE)
         with self.assertRaises(patch.AlreadyPatched):
             patch.build_patch(result)
+
+    def test_rewrites_legacy_models_response_and_setter(self):
+        patch = load_patch()
+        result, stats = patch.build_patch(SOURCE)
+        self.assertIn("models:__localModels", result)
+        self.assertIn("async unstable_setSessionModel", result)
+        self.assertIn('e.modelId!=="local"', result)
+        self.assertEqual(stats["legacy-models"], 1)
+        self.assertEqual(stats["legacy-model-set"], 1)
 
 
 if __name__ == "__main__":
