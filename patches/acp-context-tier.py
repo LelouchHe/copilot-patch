@@ -22,7 +22,7 @@ Idempotent. Safe to re-run. Must be re-run after every copilot update, since the
 updater downloads a fresh app.js -- ../bin/copilot-acp.sh does that automatically
 on every spawn.
 
-Verified on copilot 1.0.75. Anchors are call sites rather than function bodies,
+Verified on copilot 1.0.75 and 1.0.81. Anchors are call sites rather than function bodies,
 so an anchor miss is a clean error (exit 2, file untouched). The result is also
 syntax-checked before it replaces the original (exit 3 if it does not parse), so
 a bad splice can never leave copilot unable to start.
@@ -65,16 +65,35 @@ def build_patch(src: str) -> Tuple[str, Dict[str, object]]:
         r"async resolveInitialReasoningEffort\(\)\{.*?"
         r"\(await (\w+)\.load\(this\.options\.settings\)\)\?\.effortLevel",
         src, re.S)
+    settings_load = None
+    if anchor:
+        settings_load = f"{anchor.group(1)}.load(this.options.settings)"
+    else:
+        anchor = re.search(
+            r"async resolveInitialReasoningEffort\(\)\{.*?"
+            r"\(await (\w+)\.userSettingsLoad\(\{"
+            r"configDir:this\.options\.settings\?\.configDir,"
+            r"homeDirectory:(\w+)\.homedir\(\),"
+            r"environment:process\.env\}\)\)\?\.effortLevel",
+            src,
+            re.S,
+        )
+        if anchor:
+            settings_load = (
+                f"{anchor.group(1)}.userSettingsLoad("
+                "{configDir:this.options.settings?.configDir,"
+                f"homeDirectory:{anchor.group(2)}.homedir(),"
+                "environment:process.env})"
+            )
     if not anchor:
         raise LookupError("resolveInitialReasoningEffort anchor not found")
-    loader = anchor.group(1)
 
     helper = (
         "async __acpContextTier(){"
         "try{"
         "let t=this.options.options?.context;"
         'if(t!==void 0&&t!==null&&t!=="")return t;'
-        f"return(await {loader}.load(this.options.settings))?.contextTier"
+        f"return(await {settings_load})?.contextTier"
         "}catch{return}}"
         "async __acpApplyTier(s){"
         "try{"
@@ -112,17 +131,19 @@ def build_patch(src: str) -> Tuple[str, Dict[str, object]]:
     # resets it. Best-effort: this only affects mid-session model changes.
     src, n_switch = re.subn(
         r"async applySessionModel\((\w+),(\w+)\)\{"
-        r"await \1\.session\.model\.switchTo\(\{modelId:\2\}\)\}",
+        r"await \1\.session\.model\.switchTo\(\{modelId:\2"
+        r"(?:,source:\"sdk\")?\}\)\}",
         lambda m: (
             f"async applySessionModel({m.group(1)},{m.group(2)})"
             "{let __t=await this.__acpContextTier();"
             f"await {m.group(1)}.session.model.switchTo("
-            f"{{modelId:{m.group(2)},...__t!==void 0?{{contextTier:__t}}:{{}}}})}}"
+            f"{{modelId:{m.group(2)},source:\"sdk\","
+            "...(__t!==void 0?{contextTier:__t}:{})})}"
         ),
         src, count=1)
 
     return src, {"session sites": n_create, "force-apply": n_apply,
-                 "model-switch": n_switch, "loader": loader}
+                 "model-switch": n_switch}
 
 
 def publish(path: str, src: str) -> str:

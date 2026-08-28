@@ -33,6 +33,123 @@ class AlreadyPatched(Exception):
     pass
 
 
+def build_native_patch(src: str) -> Tuple[str, Dict[str, int]]:
+    """Patch the NativeAcpModelSession-based ACP implementation in 1.0.81+."""
+    config_method = re.search(
+        r"async buildConfigOptions\((\w+)\)\{let (\w+)=\[\];",
+        src,
+    )
+    if not config_method:
+        raise LookupError("native buildConfigOptions anchor not found")
+    session = config_method.group(1)
+    options = config_method.group(2)
+    insert_at = config_method.end()
+    src = (
+        src[:insert_at]
+        + f"let __localLabel=process.env.{MARKER}?.trim();"
+        + src[insert_at:]
+    )
+
+    projection = re.search(
+        rf"let (\w+)={session}\.model\.projectConfig"
+        rf"\(this\.options\.settings\);"
+        rf"\1\.modelOption&&{options}\.push\(\1\.modelOption\)",
+        src,
+        re.S,
+    )
+    if not projection:
+        raise LookupError("native model projection anchor not found")
+    projected = projection.group(1)
+    replacement = (
+        f"let {projected}={session}.model.projectConfig(this.options.settings);"
+        "if(__localLabel){"
+        f'{options}.push(this.createSelectOption({{id:"model",name:"Model",'
+        'category:"model",description:"The fixed local model used by this ACP session.",'
+        'currentValue:"local",options:[{value:"local",name:__localLabel,'
+        "description:__localLabel}]}))"
+        "}else "
+        f"{projected}.modelOption&&{options}.push({projected}.modelOption)"
+    )
+    src = src[: projection.start()] + replacement + src[projection.end() :]
+
+    state = re.search(
+        r"async buildSessionStateResponse\((\w+),(\w+),(\w+)\)\{"
+        r"let\{modelState:(\w+),capiModels:(\w+)\}="
+        r"await this\.fetchModelsForSession\(\2,\3,\1,0\),(\w+)=\4;",
+        src,
+    )
+    if not state:
+        raise LookupError("native model state anchor not found")
+    response_models = state.group(6)
+    state_replacement = (
+        state.group(0)
+        + f"let __localLabel=process.env.{MARKER}?.trim();"
+        + f"if(__localLabel){response_models}="
+        + '{availableModels:[{modelId:"local",name:__localLabel,'
+        + 'description:__localLabel}],currentModelId:"local"};'
+    )
+    src = src[: state.start()] + state_replacement + src[state.end() :]
+
+    setter = re.search(
+        r"async setSessionConfigOption\((\w+)\)\{"
+        r"let (\w+)=this\.sessions\.get\(\1\.sessionId\);"
+        r"if\(!\2\)throw (\w+)\.resourceNotFound\(.*?"
+        r'case"model":\{',
+        src,
+        re.S,
+    )
+    if not setter:
+        raise LookupError("native setSessionConfigOption anchor not found")
+    request = setter.group(1)
+    error_type = setter.group(3)
+    insert_at = setter.end()
+    guard = (
+        f"let __localLabel=process.env.{MARKER}?.trim();"
+        "if(__localLabel){"
+        f'if({request}.value!=="local")throw new {error_type}'
+        '(-32602,"This ACP session is fixed to the local model.");'
+        "break}"
+    )
+    src = src[:insert_at] + guard + src[insert_at:]
+
+    legacy_setter = re.search(
+        r"async unstable_setSessionModel\((\w+)\)\{"
+        r"(let (\w+)=this\.sessions\.get\(\1\.sessionId\);"
+        r"if\(!\3\)throw (\w+)\.resourceNotFound\([^;]+;)",
+        src,
+    )
+    if not legacy_setter:
+        raise LookupError("native unstable_setSessionModel anchor not found")
+    legacy_request = legacy_setter.group(1)
+    legacy_session_check = legacy_setter.group(2)
+    legacy_error_type = legacy_setter.group(4)
+    legacy_guard = (
+        f"let __localLabel=process.env.{MARKER}?.trim();"
+        "if(__localLabel){"
+        f'if({legacy_request}.modelId!=="local")throw new {legacy_error_type}'
+        '(-32602,"This ACP session is fixed to the local model.");'
+        "return{}}"
+    )
+    replacement = (
+        f"async unstable_setSessionModel({legacy_request})"
+        "{"
+        + legacy_session_check
+        + legacy_guard
+    )
+    src = (
+        src[: legacy_setter.start()]
+        + replacement
+        + src[legacy_setter.end() :]
+    )
+
+    return src, {
+        "model-options": 1,
+        "model-set": 1,
+        "legacy-models": 1,
+        "legacy-model-set": 1,
+    }
+
+
 def fail(msg: str, code: int) -> NoReturn:
     print(f"{NAME}: ERROR {msg}", file=sys.stderr)
     sys.exit(code)
@@ -41,6 +158,9 @@ def fail(msg: str, code: int) -> NoReturn:
 def build_patch(src: str) -> Tuple[str, Dict[str, int]]:
     if MARKER in src:
         raise AlreadyPatched()
+
+    if "NativeAcpModelSession" in src:
+        return build_native_patch(src)
 
     method = re.search(
         r"async buildConfigOptions\((\w+),(\w+)\)\{",

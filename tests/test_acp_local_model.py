@@ -49,6 +49,27 @@ SOURCE = (
     'return{models:o,modes:d,configOptions:c}}'
 )
 
+NATIVE_SOURCE = (
+    "NativeAcpModelSession;"
+    "async buildConfigOptions(e){let n=[];"
+    'n.push(this.createSelectOption({id:"mode"}));'
+    "let r=e.model.projectConfig(this.options.settings);"
+    "r.modelOption&&n.push(r.modelOption),"
+    "r.reasoningOption&&n.push(r.reasoningOption);return n}"
+    "async buildSessionStateResponse(e,n,r){"
+    "let{modelState:o,capiModels:s}=await this.fetchModelsForSession(n,r,e,0),a=o;"
+    "return{models:a,configOptions:[]}}"
+    "async unstable_setSessionModel(e){let n=this.sessions.get(e.sessionId);"
+    "if(!n)throw xo.resourceNotFound(`Session ${e.sessionId} not found`);"
+    "let r=this.validateModelSelection(n,e.modelId);"
+    "return this.applySessionModel(n,r),{}}"
+    "async setSessionConfigOption(e){let n=this.sessions.get(e.sessionId);"
+    "if(!n)throw xo.resourceNotFound(`Session ${e.sessionId} not found`);"
+    'switch(e.configId){case"model":{'
+    "let r=this.validateModelSelection(n,e.value);"
+    "this.applySessionModel(n,r);break}}return{configOptions:[]}}"
+)
+
 
 class LocalModelPatchTests(unittest.TestCase):
     def test_rewrites_model_option_only_when_label_is_set(self):
@@ -82,6 +103,16 @@ class LocalModelPatchTests(unittest.TestCase):
         self.assertIn('e.modelId!=="local"', result)
         self.assertEqual(stats["legacy-models"], 1)
         self.assertEqual(stats["legacy-model-set"], 1)
+
+    def test_rewrites_native_acp_model_projection(self):
+        patch = load_patch()
+        result, stats = patch.build_patch(NATIVE_SOURCE)
+        self.assertIn('currentValue:"local"', result)
+        self.assertIn("models:a", result)
+        self.assertIn('currentModelId:"local"', result)
+        self.assertIn('e.value!=="local"', result)
+        self.assertIn('e.modelId!=="local"', result)
+        self.assertEqual(stats["model-options"], 1)
 
 
 if __name__ == "__main__":
