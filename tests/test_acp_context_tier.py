@@ -7,7 +7,7 @@ import sys
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PATCH = os.path.join(REPO, "patches", "acp-context-tier.py")
+PATCH = os.path.join(REPO, "archives", "acp-context-tier.py")
 
 
 def load_patch():

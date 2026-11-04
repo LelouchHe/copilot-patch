@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make `--context` / `settings.contextTier` work in copilot's ACP mode.
+"""Archived: make `--context` / `settings.contextTier` work in ACP mode.
 
 Why: copilot's ACP server (`copilot --acp`) never passes `contextTier` when
 creating sessions. It resolves `reasoningEffort` (CLI flag -> settings.effortLevel)

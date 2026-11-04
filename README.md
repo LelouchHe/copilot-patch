@@ -1,300 +1,102 @@
 # copilot-patch
 
-> **Archived 2026-11-03.** Both patches here worked around upstream bugs that
-> Copilot CLI has since fixed, and neither can run against a current CLI anyway.
-> The repository is kept for history only and is no longer maintained. Do not
-> install the wrapper: launch Copilot directly, for example
-> `copilot --acp --context long_context`.
+Expose Copilot CLI's built-in `image_generation` tool in CLI and ACP sessions.
+Verified against **Copilot CLI 1.0.105**, including an actual image-generation
+call over ACP that returned a PNG image content block.
 
-## Why this was archived
+The CLI already ships the tool, but this installation does not expose it by
+default. Two changes are needed:
 
-Last evaluated against **Copilot CLI 1.0.105**.
+1. The launcher appends `IMAGE_GENERATION_TOOL` to
+   `COPILOT_CLI_ENABLED_FEATURE_FLAGS`, preserving existing flags.
+2. `patches/acp-image-generation.py` adds
+   `imageGeneration: {enabled: settings?.imageGeneration !== false}` to ACP's
+   native boot options. The flag alone works for non-ACP sessions, but does
+   **not** expose the tool over ACP.
 
-**`acp-context-tier.py` — the bug is fixed upstream.** Each root cause this
-repository documented is gone from the shipped bundle:
+The patch edits the cached `cli-main.js`, not native binaries, user settings,
+or shell startup files. The current session's tool list does not change;
+start a new session through the wrapper.
 
-1. The ACP server's boot options now resolve the tier instead of returning before
-   it (`contextTier: options.context ?? settings.contextTier`).
-2. Those options carry the tier *and* a separate `acpCliContextTier`, which keeps
-   the CLI-explicit value distinct from the settings fallback — precisely the
-   resume path this repository called load-bearing, where a persisted session
-   restores its own model state and overrides the tier.
-3. Model switches now go through `switchTo({modelId, config: {reasoningEffort,
-   contextTier, verbosity}})` with a `forwardedContextTier` carried forward, so a
-   switch no longer drops the tier.
+## Usage
 
-The CLI changelog agrees: 1.0.95 states that `--context` now applies to new and
-resumed ACP sessions instead of silently using the default or previously saved
-context tier, and 1.0.93 honours `--context long_context` at startup.
+The existing host entry point is preserved:
 
-**`acp-local-model.py` — the bug no longer reproduces.** Under BYOK
-(`COPILOT_PROVIDER_BASE_URL` + `COPILOT_MODEL`, checked against a local stand-in
-provider) `session/new` returns neither a `model` config option nor a `models`
-field, so the cloud catalog this patch existed to hide is no longer advertised.
-Upstream chose to advertise nothing rather than to present one labelled local
-model, so the presentation half of the patch was never upstreamed — but it only
-ever mattered to BYOK hosts.
-
-**Neither patch can run regardless.** In 1.0.105 the patch target `app.js` is a
-44 KB bootstrap and the application moved to `cli-main.js` (8.3 MB), where
-`resolveInitialReasoningEffort`, `buildConfigOptions` and `projectConfig` no
-longer exist. Both patches exit with an anchor miss, and the wrapper degrades to
-a stderr warning plus an unpatched — but working — agent on every spawn.
-
-**What was *not* verified, and why.** This repository's A/B evidence measured
-`capabilities.limits` (`max_prompt_tokens` 272,000 → 922,000). That surface no
-longer exists over ACP: `session/new` is byte-identical between `copilot --acp`
-and `copilot --acp --context long_context` apart from the session id, and
-`--log-level all` records nothing about the tier (it records nothing about
-reasoning effort either). The conclusions above therefore rest on root-cause
-elimination in `cli-main.js`, the upstream changelog, and the BYOK probe — not on
-reproducing that measurement.
-
-**One gap remains, and it is not what this repository patched.** ACP still only
-accepts the tier at spawn: it does not expose `contextTier` as a session config
-option, so clients cannot discover or change it mid-session
-(github/copilot-cli#4275). That is a missing feature, not a silently dropped
-setting.
-
----
-
-The original, unmaintained documentation follows.
-
-Local patches for [GitHub Copilot CLI](https://github.com/github/copilot-cli), plus a
-launcher wrapper that keeps them applied across the CLI's self-updates.
-
-Everything here works around upstream bugs. Each patch is meant to be **deleted**
-once the corresponding issue is fixed.
-
-## Why this exists
-
-`copilot` ships as a Node SEA binary: the Mach-O executable is just a Node runtime
-plus a bootstrap loader (`__NODE_SEA_BLOB`). The actual application is a plain,
-minified `app.js` that the launcher extracts to and imports from:
-
-```
-~/Library/Caches/copilot/pkg/<platform>/<version>/app.js
+```bash
+./bin/copilot-acp.sh --acp --context long_context
+./bin/copilot-acp.sh -p 'Generate an image of the solar system'
 ```
 
-There is no integrity check on that file, so it can be patched in place. But it
-lives in a **version-scoped directory**, and the CLI auto-updates itself every few
-days — each update lands in a fresh directory with a pristine `app.js`, silently
-dropping any patch.
+The ACP bundle patch can also be applied independently:
 
-Hence `bin/copilot-acp.sh`: spawn `copilot` through it and every patch is
-re-applied first, on every single spawn.
+```bash
+python3 patches/acp-image-generation.py /path/to/cli-main.js
+COPILOT_CLI_ENABLED_FEATURE_FLAGS=IMAGE_GENERATION_TOOL copilot --acp
+```
 
-## Layout
-
-| Path | Purpose |
-|---|---|
-| `bin/copilot-acp.sh` | Wrapper: runs the staged patch pipeline, then `exec`s `copilot` with the args passed through |
-| `lib/apply_patches.py` | Rebuilds from pristine source, isolates each patch, and atomically publishes the last-good stage |
-| `patches/*` | Individual patches; any executable, idempotent, independently runnable |
-| `lib/find_app_js.py` | Resolves which `app.js` copilot will actually load |
-| `tests/` | Tests for the resolver, patch pipeline, and structured patch logic |
-
-## Why bash and Python
-
-The wrapper is bash because its whole job is *process plumbing*: run the Python
-pipeline, then `exec` copilot so the agent replaces this process rather than
-hanging a supervisor off it. That keeps the process tree flat, signals direct,
-and the host's `ps` output honest.
-
-Patches are Python because their job is the opposite: careful text surgery on a
-9 MB minified bundle, with regex, atomic replace, and subprocess verification.
-
-Node/TypeScript would work — Node 24's `process.execve` gives real process
-replacement, so even the wrapper is expressible. It is not used because it buys
-nothing here and costs robustness: a TS wrapper would need node on `PATH` plus
-type-stripping support just to launch. Python and node remain soft dependencies
-for patching: if the pipeline cannot run or node cannot validate JavaScript, the
-wrapper leaves the live bundle untouched and still starts Copilot.
-
-The one thing deliberately avoided is mixing the two. An earlier version was a
-bash script that was 75% Python heredoc — the worst of both, with no syntax
-highlighting, no linting, and quoting hazards. The boundary is now crisp: bash for
-process control, Python for logic.
-
-### On the missing type system
-
-A fair objection, and the honest answer is that it buys little *here*. Of the five
-bugs hit while building this, a static type checker would have caught **none**:
-the helper injection that produced invalid JS, the resolver scanning one cache
-root too few, the tier being overridden on the resume path, a fragile `sort -k`
-field number, and an error message grabbing the wrong line. Every one is
-well-typed — `str` in, `str` out — and wrong anyway.
-
-That is inherent to the domain. The input is 9 MB of minified JavaScript and the
-output is the same string, edited. Nothing interesting is expressible as a type;
-what actually matters is whether a regex landed in the right place, whether the
-result still parses, and whether the patched program behaves correctly at runtime.
-
-So the verification lives where the risk is, not in the patcher's signatures:
-
-| Risk | Gate |
-|---|---|
-| Regex matched the wrong place | `node --check` before publishing |
-| Upstream restructured | Anchor miss → exit 2, nothing written |
-| Resolver picks a copy nobody loads | `tests/`, mutation-checked |
-| Patch does not actually work | A/B probe against a live agent |
-
-Type hints are present anyway — they cost nothing at runtime, document intent, and
-make `mypy`/`pyright` usable if the code ever grows structured data worth checking.
-
-## Finding the right app.js
-
-Non-obvious, and getting it wrong fails silently. The loader does **not** just use
-the newest directory under one cache root — it scans several roots
-(`$COPILOT_CACHE_HOME`, `~/Library/Caches/copilot`, `$XDG_CACHE_HOME/copilot`,
-`$COPILOT_HOME`, `~/.copilot`), each with `universal/` and `<platform>-<arch>/`
-subdirectories, then picks the **highest version across all of them**.
-
-That matters in practice: this machine had 1.0.70–1.0.74 left in `~/.copilot/pkg`
-and 1.0.75 in `~/Library/Caches/copilot/pkg`. A newer build landing in the older
-root would win — and a patcher that only looked at the obvious root would happily
-patch a copy nobody loads.
-
-`lib/find_app_js.py` mirrors the loader's own resolution (ported from its
-`index.js`), including prerelease ordering. It does not model `--prefer-version`
-or the auto-update-disabled path, which bypass the cache scan entirely; pass an
-explicit path to a patch if you need those.
-
-## Install
-
-Point your ACP host at the wrapper instead of `copilot` directly. For
-[webagent](https://github.com/LelouchHe/webagent), in `config.toml`:
+For an ACP host, set its agent command to:
 
 ```toml
 agent_cmd = "/Users/<you>/mine/code/copilot-patch/bin/copilot-acp.sh --acp --context long_context"
 ```
 
-Flags are passed straight through, so the CLI stays configurable from there.
+Arguments, working directory, and exit status pass through unchanged. Python 3
+and Node are required to apply and validate the patch. Copilot is resolved from
+`PATH`, with the existing `/opt/homebrew/bin/copilot` fallback. No host service
+configuration is changed automatically.
 
-Patches can also be run standalone, though normal launches should use the
-pipeline:
+## Patch safety and rollback
 
-```bash
-./patches/acp-context-tier.py              # resolves the loaded app.js itself
-./patches/acp-context-tier.py /path/app.js # or target one explicitly
-```
+The existing pipeline rebuilds from `cli-main.js.orig` on every launch,
+applies executable files in `patches/` to isolated candidates, syntax-checks
+them with `node --check`, and atomically publishes the last-good stage. This
+also reapplies the patch after CLI updates. The resolver selects the newest
+cached package first, then `cli-main.js` (or `app.js` for older releases).
 
-## Patch pipeline
+The patch requires one recognized ACP boot-options anchor and refuses
+unrecognized existing image options. Anchor or validation failures are logged,
+not silently treated as success. The pipeline can continue with an unpatched
+bundle; the tool may then remain unavailable over ACP.
 
-Every wrapper launch rebuilds the loaded bundle from `app.js.orig` and applies
-executable files in `patches/` in filename order. Each patch receives its own
-candidate copy:
+To disable image generation, use Copilot's `imageGeneration: false` setting.
+To remove the bundle patch, make `patches/acp-image-generation.py`
+non-executable and run `python3 lib/apply_patches.py`; it rebuilds from the
+pristine backup without that patch. Then launch plain `copilot` without the
+wrapper or feature-flag override. Do not copy a backup between CLI versions.
 
-1. Success plus JavaScript validation promotes the candidate to last-good.
-2. Failure discards only that candidate and continues with the next patch.
-3. A final `node --check` gates one atomic publish of the last-good stage.
-4. A fatal pipeline failure leaves the live bundle untouched and never blocks
-   Copilot startup.
+## Limits
 
-The wrapper logs the complete result:
+This enables a local feature flag, not account access. Authentication, model
+policies, tool permissions, and image-generation billing remain Copilot's
+responsibility. Image generation consumes AI credits separately from chat.
+The launcher does not change `imageGeneration: false`, disabled feature flags,
+or available/excluded tool filters. Copilot still decides their precedence.
 
-```text
-copilot-patch:
-  APPLIED  acp-context-tier.py
-  FAILED   acp-local-model.py — anchor not found
-  RESULT   1 applied, 1 failed
-```
+ACP can carry image content, but a client must implement image rendering.
+Tool availability and successfully displaying an image are separate checks.
+The flag is an internal CLI interface and may change in a later release.
+The resolver follows the normal cached-package launch path. Do not combine
+this wrapper with `--no-auto-update`, a version-pinned launch, or
+`COPILOT_AUTO_UPDATE=false`: those can select a different embedded bundle.
 
-Patches should be independent. Filename order is deterministic for the few cases
-where one patch intentionally builds on another. Removing or making a patch
-non-executable removes it from the next rebuild; no reverse patch is needed.
+## Archives and tests
 
-## Patches
+The retired long-context and BYOK patches are in `archives/`, along with the
+[original documentation](archives/README.md). Their upstream bugs no longer
+reproduce in 1.0.105. They are not run by the launcher.
 
-### `acp-context-tier.py`
+`lib/` retains the staged patch pipeline, with its resolver updated for
+`cli-main.js`. Archived patch tests still run; archived executables are outside
+`patches/` and are never applied by the launcher.
 
-**Problem:** in ACP mode (`copilot --acp`), the context window tier is silently
-ignored. Both `--context long_context` and `"contextTier"` in
-`~/.copilot/settings.json` are dropped, and every ACP session runs on the default
-context window.
-
-**Root cause** (verified against 1.0.75):
-
-1. The `--acp` branch in `main()` returns *before* the line that resolves
-   `t.context ?? settings.contextTier`, so neither source is ever read.
-2. The ACP agent module contains **zero** references to `contextTier`. It resolves
-   `reasoningEffort` (CLI flag → `settings.effortLevel`) but has no equivalent for
-   the tier, and never passes the field when creating or loading sessions.
-3. `applySessionModel()` calls `switchTo({modelId})` only, so an ACP client
-   switching models would drop the tier even if it had been set.
-4. The interactive TUI has compensating logic (read settings → `options.update`)
-   that ACP lacks entirely — which is why this only breaks under ACP.
-
-**Fix:** injects `__acpContextTier()` (CLI `--context`, else `settings.contextTier`)
-and wires it into four places: session create, session load, a forced
-`options.update` once the session handle exists, and model switch.
-
-The forced update is load-bearing. Passing `contextTier` at creation is not enough
-on the **resume** path — a persisted session restores its own model-selection state
-and overrides it. Hosts that reconnect via `session/load` (webagent does) hit this
-on every restore.
-
-**Verified** by A/B on `gpt-5.6-sol`, for both new and resumed sessions:
-
-| | `max_prompt_tokens` | `max_context_window_tokens` |
-|---|---|---|
-| unpatched | 272,000 | 400,000 |
-| patched | **922,000** | **1,050,000** |
-
-**Upstream:** related but not ACP-specific — github/copilot-cli#3481, #3762.
-Delete this patch once ACP honours the tier.
-
-### `acp-local-model.py`
-
-**Problem:** Copilot BYOK pins inference to `COPILOT_MODEL`, but ACP still
-advertises the GitHub cloud model catalog. ACP hosts therefore show selectable
-cloud models that do not describe the actual local route.
-
-**Fix:** when `COPILOT_PATCH_LOCAL_MODEL_LABEL` is set, ACP exposes one logical
-model with value `local` and the supplied display label. Selecting `local` is a
-no-op; other model values are rejected. The provider and wire model are not
-changed. Without the environment variable, cloud catalog behavior is untouched.
-
-This is presentation/selection compatibility only. Delete the patch when Copilot
-ACP reports BYOK models correctly upstream.
-
-## Safety
-
-Patching a minified bundle in place is inherently sharp, so failures are made
-loud and non-destructive:
-
-- **Verify before publishing.** A patch writes to a temp file, runs
-  `node --check` on it, and only then renames it over the target. A regex that
-  matches in the wrong place produces invalid JS, and copilot would then fail to
-  start at all — much worse than an unpatched agent. This is not hypothetical: it
-  happened while developing `acp-context-tier.py`, where an injection swallowed
-  the following method name.
-- **Anchor misses abort.** Patches key off call sites and reverse-derive minified
-  identifiers from surrounding code rather than hardcoding them. If an anchor
-  stops matching, the script exits non-zero **without writing**.
-- **The wrapper never blocks startup.** Any patch failure degrades to a stderr
-  warning and an unpatched — but working — agent.
-- **Originals are kept.** First run saves `app.js.orig` and never overwrites it.
-  Every launch rebuilds from that pristine copy, so removing a patch automatically
-  rolls it back while retaining all other successful patches.
-- **Patch failures are isolated.** A failed candidate is discarded and later
-  independent patches continue from the previous last-good stage.
-- **Publication is atomic.** The live bundle changes only once, after the final
-  staged bundle passes syntax validation.
-- **Pristine backup creation is atomic.** An interrupted first copy cannot leave
-  a partial `.orig` that future rebuilds mistake for the source of truth.
-- **Validation is mandatory for publication.** If node is unavailable, the
-  pipeline preserves the live bundle rather than publishing unchecked code.
-
-## Testing
+Run the launcher and archived-patch regression tests:
 
 ```bash
+python3 -m unittest discover -s tests
 python3 tests/test_find_app_js.py
-python3 tests/test_apply_patches.py
-python3 tests/test_acp_local_model.py
+bash -n bin/copilot-acp.sh
 ```
 
-The pipeline suite verifies skip-on-failure, continuation, rebuild-from-pristine,
-and preservation of the live bundle when final validation fails. Patch-specific
-tests cover structured transformations where practical. Every patch and the
-final pipeline output are also checked against JavaScript syntax at runtime.
+Launcher tests use a stand-in Copilot process and do not call image services.
+ACP option tests execute the transformed JavaScript in Node, including the
+explicit settings opt-out and unchanged context/tool filters.

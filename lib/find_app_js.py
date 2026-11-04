@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Resolve the app.js that `copilot` will actually load, and print its path.
+"""Resolve the main bundle that `copilot` will actually load, and print its path.
 
 copilot is a Node SEA: the binary is a runtime plus a bootstrap loader, and the
-real application is a plain app.js under a version-scoped package cache. The
+real application is cli-main.js (app.js before the bundle split) in a
+version-scoped package cache. The
 loader does not simply use the newest directory it can find -- it scans several
 cache roots and picks a winner by version. Patching the wrong copy fails
 silently, so this mirrors the loader's own resolution instead of guessing.
@@ -13,7 +14,8 @@ helpers are:
     K()  -> cache roots, in order, deduplicated
     Se() -> for each root, [root/universal, root/<platform>-<arch>]
     J()  -> collect dirs containing app.js; sort by basename version descending,
-            ties broken by full path ascending; caller takes [0]
+            ties broken by full path ascending; caller takes [0]. Resolve
+            cli-main.js in that package when present, otherwise app.js.
 
 Caveats this deliberately does not model:
 
@@ -126,7 +128,9 @@ def find_app_js() -> Optional[str]:
     if not candidates:
         return None
     candidates.sort(key=sort_key)
-    return os.path.join(candidates[0], "app.js")
+    package = candidates[0]
+    main = os.path.join(package, "cli-main.js")
+    return main if os.access(main, os.R_OK) else os.path.join(package, "app.js")
 
 
 def main() -> int:

@@ -116,6 +116,26 @@ def test_no_candidates_exits_nonzero():
               (code != 0, out), (True, ""))
 
 
+def test_current_bundle_uses_cli_main():
+    with tempfile.TemporaryDirectory() as home:
+        cache = os.path.join(home, "Library", "Caches", "copilot")
+        app = make_app(cache, PLATFORM_DIR, "1.0.105")
+        main = os.path.join(os.path.dirname(app), "cli-main.js")
+        with open(main, "w") as stream:
+            stream.write("// main bundle\n")
+        check("current package resolves cli-main.js", resolve(home)[1], main)
+
+
+def test_version_selection_precedes_bundle_filename():
+    with tempfile.TemporaryDirectory() as home:
+        cache = os.path.join(home, "Library", "Caches", "copilot")
+        app = make_app(cache, PLATFORM_DIR, "1.0.104")
+        with open(os.path.join(os.path.dirname(app), "cli-main.js"), "w") as stream:
+            stream.write("// main bundle\n")
+        newest = make_app(cache, PLATFORM_DIR, "1.0.105")
+        check("newest package wins before filename choice", resolve(home)[1], newest)
+
+
 if __name__ == "__main__":
     print(f"find-app-js resolver ({PLATFORM_DIR})")
     for fn in [
@@ -125,6 +145,8 @@ if __name__ == "__main__":
         test_universal_dir_considered,
         test_cache_home_env_root,
         test_no_candidates_exits_nonzero,
+        test_current_bundle_uses_cli_main,
+        test_version_selection_precedes_bundle_filename,
     ]:
         fn()
 

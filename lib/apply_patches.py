@@ -186,7 +186,7 @@ def main(argv: list[str]) -> int:
     patches_dir = argv[2] if len(argv) > 2 else str(repo / "patches")
     if not app_path or not os.path.isfile(app_path):
         print(
-            f"copilot-patch: ERROR app.js not found: {app_path or '<unresolved>'}",
+            f"copilot-patch: ERROR bundle not found: {app_path or '<unresolved>'}",
             file=sys.stderr,
         )
         return 1
