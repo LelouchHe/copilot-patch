@@ -1,5 +1,65 @@
 # copilot-patch
 
+> **Archived 2026-11-03.** Both patches here worked around upstream bugs that
+> Copilot CLI has since fixed, and neither can run against a current CLI anyway.
+> The repository is kept for history only and is no longer maintained. Do not
+> install the wrapper: launch Copilot directly, for example
+> `copilot --acp --context long_context`.
+
+## Why this was archived
+
+Last evaluated against **Copilot CLI 1.0.105**.
+
+**`acp-context-tier.py` — the bug is fixed upstream.** Each root cause this
+repository documented is gone from the shipped bundle:
+
+1. The ACP server's boot options now resolve the tier instead of returning before
+   it (`contextTier: options.context ?? settings.contextTier`).
+2. Those options carry the tier *and* a separate `acpCliContextTier`, which keeps
+   the CLI-explicit value distinct from the settings fallback — precisely the
+   resume path this repository called load-bearing, where a persisted session
+   restores its own model state and overrides the tier.
+3. Model switches now go through `switchTo({modelId, config: {reasoningEffort,
+   contextTier, verbosity}})` with a `forwardedContextTier` carried forward, so a
+   switch no longer drops the tier.
+
+The CLI changelog agrees: 1.0.95 states that `--context` now applies to new and
+resumed ACP sessions instead of silently using the default or previously saved
+context tier, and 1.0.93 honours `--context long_context` at startup.
+
+**`acp-local-model.py` — the bug no longer reproduces.** Under BYOK
+(`COPILOT_PROVIDER_BASE_URL` + `COPILOT_MODEL`, checked against a local stand-in
+provider) `session/new` returns neither a `model` config option nor a `models`
+field, so the cloud catalog this patch existed to hide is no longer advertised.
+Upstream chose to advertise nothing rather than to present one labelled local
+model, so the presentation half of the patch was never upstreamed — but it only
+ever mattered to BYOK hosts.
+
+**Neither patch can run regardless.** In 1.0.105 the patch target `app.js` is a
+44 KB bootstrap and the application moved to `cli-main.js` (8.3 MB), where
+`resolveInitialReasoningEffort`, `buildConfigOptions` and `projectConfig` no
+longer exist. Both patches exit with an anchor miss, and the wrapper degrades to
+a stderr warning plus an unpatched — but working — agent on every spawn.
+
+**What was *not* verified, and why.** This repository's A/B evidence measured
+`capabilities.limits` (`max_prompt_tokens` 272,000 → 922,000). That surface no
+longer exists over ACP: `session/new` is byte-identical between `copilot --acp`
+and `copilot --acp --context long_context` apart from the session id, and
+`--log-level all` records nothing about the tier (it records nothing about
+reasoning effort either). The conclusions above therefore rest on root-cause
+elimination in `cli-main.js`, the upstream changelog, and the BYOK probe — not on
+reproducing that measurement.
+
+**One gap remains, and it is not what this repository patched.** ACP still only
+accepts the tier at spawn: it does not expose `contextTier` as a session config
+option, so clients cannot discover or change it mid-session
+(github/copilot-cli#4275). That is a missing feature, not a silently dropped
+setting.
+
+---
+
+The original, unmaintained documentation follows.
+
 Local patches for [GitHub Copilot CLI](https://github.com/github/copilot-cli), plus a
 launcher wrapper that keeps them applied across the CLI's self-updates.
 
