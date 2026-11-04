@@ -1,5 +1,8 @@
 # copilot-patch
 
+**Status: active.** The repository is maintained for the image-generation
+patch below. Only the retired long-context and BYOK patches are archived.
+
 Expose Copilot CLI's built-in `image_generation` tool in CLI and ACP sessions.
 Verified against **Copilot CLI 1.0.105**, including an actual image-generation
 call over ACP that returned a PNG image content block.
@@ -13,6 +16,14 @@ default. Two changes are needed:
    `imageGeneration: {enabled: settings?.imageGeneration !== false}` to ACP's
    native boot options. The flag alone works for non-ACP sessions, but does
    **not** expose the tool over ACP.
+
+| Mode | Required changes |
+|---|---|
+| CLI (non-ACP) | Feature-flag environment variable |
+| ACP | Feature-flag environment variable **and** the bundle patch |
+
+There is no image-generation command-line option in CLI 1.0.105. The wrapper
+handles both changes; adding a startup argument alone is not sufficient.
 
 The patch edits the cached `cli-main.js`, not native binaries, user settings,
 or shell startup files. The current session's tool list does not change;
